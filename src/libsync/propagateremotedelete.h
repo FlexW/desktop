@@ -53,6 +53,8 @@ class PropagateRemoteDelete : public PropagateItemJob
 {
     Q_OBJECT
     QPointer<DeleteJob> _job;
+    QVector<DeleteJob*> _deleteJobs;
+    int _numFinishedDeleteJobs = 0;
     PropagateRemoteDeleteEncrypted *_deleteEncryptedHelper = nullptr;
 
 public:
@@ -63,11 +65,16 @@ public:
     JobParallelism parallelism() override;
     void start() override;
     void createDeleteJob(const QString &filename);
+    void appendDeleteJob(const QString &filename);
     void abort(PropagatorJob::AbortType abortType) override;
 
     bool isLikelyFinishedQuickly() override { return !_item->isDirectory(); }
 
+signals:
+    void deleteNestedJobsFinished();
+
 private slots:
     void slotDeleteJobFinished();
+    void slotDeleteNestedJobFinished();
 };
 }

@@ -1152,7 +1152,7 @@ bool SyncJournalDb::getFileRecordsByFileId(const QByteArray &fileId, const std::
     return true;
 }
 
-bool SyncJournalDb::getFilesBelowPath(const QByteArray &path, const std::function<void(const SyncJournalFileRecord&)> &rowCallback)
+bool SyncJournalDb::getFilesBelowPath(const QByteArray &path, const std::function<void(const SyncJournalFileRecord&)> &rowCallback, const std::function<void()> &finished)
 {
     QMutexLocker locker(&_mutex);
 
@@ -1198,6 +1198,11 @@ bool SyncJournalDb::getFilesBelowPath(const QByteArray &path, const std::functio
 
     forever {
         auto next = query->next();
+
+        if ((!next.ok || !next.hasData) && finished) {
+            finished();
+        }
+
         if (!next.ok)
             return false;
         if (!next.hasData)

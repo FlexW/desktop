@@ -27,14 +27,33 @@ QByteArray PropagateRemoteDeleteEncrypted::folderToken()
 
 void PropagateRemoteDeleteEncrypted::start()
 {
-    Q_ASSERT(!_item->_encryptedFileName.isEmpty());
-    QFileInfo info(_item->_encryptedFileName);
-    qCDebug(PROPAGATE_REMOVE_ENCRYPTED) << "Folder is encrypted, let's get the Id from it.";
-    auto job = new LsColJob(_propagator->account(), info.path(), this);
-    job->setProperties({"resourcetype", "http://owncloud.org/ns:fileid"});
-    connect(job, &LsColJob::directoryListingSubfolders, this, &PropagateRemoteDeleteEncrypted::slotFolderEncryptedIdReceived);
-    connect(job, &LsColJob::finishedWithError, this, &PropagateRemoteDeleteEncrypted::taskFailed);
-    job->start();
+    Q_ASSERT(!_item->_encryptedFileName.isEmpty() || _item->_isEncrypted);
+    if (!_item->_encryptedFileName.isEmpty()) {
+        QFileInfo info(_item->_encryptedFileName);
+        qCDebug(PROPAGATE_REMOVE_ENCRYPTED) << "Folder is encrypted, let's get the Id from it.";
+        auto job = new LsColJob(_propagator->account(), info.path(), this);
+        job->setProperties({"resourcetype", "http://owncloud.org/ns:fileid"});
+        connect(job, &LsColJob::directoryListingSubfolders, this, &PropagateRemoteDeleteEncrypted::slotFolderEncryptedIdReceived);
+        connect(job, &LsColJob::finishedWithError, this, &PropagateRemoteDeleteEncrypted::taskFailed);
+        job->start();
+    } else {
+        qCDebug(PROPAGATE_REMOVE_ENCRYPTED) << "It's a root encrypted folder. Let's remove it's nested files first.";
+
+        _propagator->_journal->getFilesBelowPath(_item->_file.toUtf8(), [&](const OCC::SyncJournalFileRecord &record) {
+            SyncFileItem item;
+
+            item._fileId = record._fileId;
+            item._encryptedFileName = record._e2eMangledName;
+            item._isEncrypted = record._isE2eEncrypted;
+            item._originalFile = record._path;
+            item._type = record._type;
+            item._etag = record._etag;
+            item._modtime = record._modtime;
+            item._remotePerm = record._remotePerm;
+            item._inode = record._inode;
+        });
+
+    }
 }
 
 void PropagateRemoteDeleteEncrypted::slotFolderEncryptedIdReceived(const QStringList &list)

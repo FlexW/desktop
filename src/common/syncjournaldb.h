@@ -62,7 +62,7 @@ public:
     bool getFileRecordByE2eMangledName(const QString &mangledName, SyncJournalFileRecord *rec);
     bool getFileRecordByInode(quint64 inode, SyncJournalFileRecord *rec);
     bool getFileRecordsByFileId(const QByteArray &fileId, const std::function<void(const SyncJournalFileRecord &)> &rowCallback);
-    bool getFilesBelowPath(const QByteArray &path, const std::function<void(const SyncJournalFileRecord&)> &rowCallback);
+    bool getFilesBelowPath(const QByteArray &path, const std::function<void(const SyncJournalFileRecord&)> &rowCallback, const std::function<void()> &finished = nullptr);
     bool listFilesInPath(const QByteArray &path, const std::function<void(const SyncJournalFileRecord&)> &rowCallback);
     bool setFileRecord(const SyncJournalFileRecord &record);
 

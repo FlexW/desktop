@@ -91,6 +91,33 @@ void PropagateRemoteDelete::start()
             createDeleteJob(_item->_encryptedFileName);
         });
         _deleteEncryptedHelper->start();
+    } else if (_item->_isEncrypted) {
+        propagator()->_journal->getFilesBelowPath(_item->_file.toUtf8(), [&](const OCC::SyncJournalFileRecord &record) {
+            appendDeleteJob(record._path);
+        },
+        [&]() {
+            if (_deleteJobs.size() > 0) {
+                connect(this, &PropagateRemoteDelete::deleteNestedJobsFinished, this, [this] () {
+                    _deleteEncryptedHelper = new PropagateRemoteDeleteEncrypted(propagator(), _item, this);
+                    connect(_deleteEncryptedHelper, &PropagateRemoteDeleteEncrypted::finished, this, [this] (bool success) {
+                        Q_UNUSED(success) // Should we skip file deletion in case of failure?
+                        createDeleteJob(_item->_file);
+                    });
+                    _deleteEncryptedHelper->start();
+                });
+                propagator()->_activeJobList.append(this);
+                for (const auto &deleteJob : qAsConst(_deleteJobs)) {
+                    deleteJob->start();
+                }
+            } else {
+                _deleteEncryptedHelper = new PropagateRemoteDeleteEncrypted(propagator(), _item, this);
+                connect(_deleteEncryptedHelper, &PropagateRemoteDeleteEncrypted::finished, this, [this] (bool success) {
+                    Q_UNUSED(success) // Should we skip file deletion in case of failure?
+                    createDeleteJob(_item->_file);
+                });
+                _deleteEncryptedHelper->start();
+            }
+        });
     } else {
         createDeleteJob(_item->_file);
     }
@@ -109,6 +136,20 @@ void PropagateRemoteDelete::createDeleteJob(const QString &filename)
     connect(_job.data(), &DeleteJob::finishedSignal, this, &PropagateRemoteDelete::slotDeleteJobFinished);
     propagator()->_activeJobList.append(this);
     _job->start();
+}
+
+void PropagateRemoteDelete::appendDeleteJob(const QString &filename)
+{
+    qCInfo(lcPropagateRemoteDelete) << "Deleting file, local" << _item->_file << "remote" << filename;
+
+    auto deleteJob = new DeleteJob(propagator()->account(),
+        propagator()->fullRemotePath(filename),
+        this);
+    if (_deleteEncryptedHelper && !_deleteEncryptedHelper->folderToken().isEmpty()) {
+        deleteJob->setFolderToken(_deleteEncryptedHelper->folderToken());
+    }
+    connect(deleteJob, &DeleteJob::finishedSignal, this, &PropagateRemoteDelete::slotDeleteNestedJobFinished);
+    _deleteJobs.append(deleteJob);
 }
 
 void PropagateRemoteDelete::abort(PropagatorJob::AbortType abortType)
@@ -170,4 +211,58 @@ void PropagateRemoteDelete::slotDeleteJobFinished()
         done(SyncFileItem::Success);
     }
 }
+
+void PropagateRemoteDelete::slotDeleteNestedJobFinished()
+{
+    auto *deleteJob = qobject_cast<DeleteJob *>(QObject::sender());
+
+    ASSERT(deleteJob);
+
+    if (!deleteJob) {
+        return;
+    }
+
+    ++_numFinishedDeleteJobs;
+
+    if (_numFinishedDeleteJobs == _deleteJobs.size()) {
+        propagator()->_activeJobList.removeOne(this);
+    }
+
+
+    QNetworkReply::NetworkError err = deleteJob->reply()->error();
+    const int httpStatus = deleteJob->reply()->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    /*_item->_httpErrorCode = httpStatus;
+    _item->_responseTimeStamp = deleteJob->responseTimestamp();
+    _item->_requestId = deleteJob->requestId();*/
+
+    if (err != QNetworkReply::NoError && err != QNetworkReply::ContentNotFoundError) {
+        SyncFileItem::Status status = classifyError(err, _item->_httpErrorCode,
+            &propagator()->_anotherSyncNeeded);
+        done(status, deleteJob->errorString());
+        return;
+    }
+
+    // A 404 reply is also considered a success here: We want to make sure
+    // a file is gone from the server. It not being there in the first place
+    // is ok. This will happen for files that are in the DB but not on
+    // the server or the local file system.
+    if (httpStatus != 204 && httpStatus != 404) {
+        // Normally we expect "204 No Content"
+        // If it is not the case, it might be because of a proxy or gateway intercepting the request, so we must
+        // throw an error.
+        done(SyncFileItem::NormalError,
+            tr("Wrong HTTP code returned by server. Expected 204, but received \"%1 %2\".")
+                .arg(httpStatus)
+                .arg(deleteJob->reply()->attribute(QNetworkRequest::HttpReasonPhraseAttribute).toString()));
+        return;
+    }
+
+    if (_numFinishedDeleteJobs == _deleteJobs.size()) {
+        propagator()->_journal->deleteFileRecord(_item->_originalFile, _item->isDirectory());
+        propagator()->_journal->commit("Remote Remove");
+        _deleteJobs.clear();
+        emit deleteNestedJobsFinished();
+    }
+}
+
 }
